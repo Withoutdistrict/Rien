@@ -99,3 +99,11 @@ ENV/
 
 # mypy
 .mypy_cache/
+
+#Moi
+AnaEnv/
+.idea/
+*.data
+*.mp3
+*.wav
+*.txt
