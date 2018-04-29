@@ -1,61 +1,16 @@
 import wave
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.fftpack import fft
+import scipy as sp
+from scipy.fftpack import fft, rfft
 from scipy.io import wavfile # get the api
+from scipy.signal import blackmanharris
+from scipy import signal
+import pyaudio
+import sounddevice as sd
+from numpy import pi, cos, cosh, arccosh, arccos, sum, exp
+from scipy.signal import argrelextrema, argrelmax
 
-try:
-    import pyaudio
-    
-except ModuleNotFoundError:
-    # Au cas où le package n'est pas installé, demande à l'utilisateur de le faire
-    print('Veuillez installer le package \'pyaudio\':')
-    print('> python -m pip install pyaudio\n')
-    raise
-
-
-def record(RECORD_SECONDS = 2):
-    """ Records sound from the microphone for RECORD_SECONDS
-        and saves to output.wav. 
-        From http://people.csail.mit.edu/hubert/pyaudio/
-    """
-    
-    CHUNK = 1024
-    FORMAT = pyaudio.paInt16
-    CHANNELS = 2
-    RATE = 44100
-    WAVE_OUTPUT_FILENAME = "output.wav"
-
-    p = pyaudio.PyAudio()
-
-    stream = p.open(format=FORMAT,
-                    channels=CHANNELS,
-                    rate=RATE,
-                    input=True,
-                    frames_per_buffer=CHUNK)
-
-    print('* recording for {} s'.format(RECORD_SECONDS))
-
-    frames = []
-
-    for i in range(0, int(RATE / CHUNK * RECORD_SECONDS)):
-        data = stream.read(CHUNK)
-        frames.append(data)
-
-    print("* done recording")
-
-    stream.stop_stream()
-    stream.close()
-    p.terminate()
-
-    wf = wave.open(WAVE_OUTPUT_FILENAME, 'wb')
-    wf.setnchannels(CHANNELS)
-    wf.setsampwidth(p.get_sample_size(FORMAT))
-    wf.setframerate(RATE)
-    wf.writeframes(b''.join(frames))
-    wf.close()
-    
-    
 def fft_wav():
     """ Calcule la transformée de Fourier du fichier 'output.wav'
         créé par record() précédemment.
@@ -64,39 +19,46 @@ def fft_wav():
     """
 
     # On lit le fichier (fréquence d'échantillonage, données)
-    fs, data = wavfile.read('accord.wav')
-    
+    fs, data = wavfile.read('261-329-392.wav')
+    N = 2500
+    w = blackmanharris(N)
+    data = np.concatenate((data[0:N].T, data[N:N*2].T))
+
+
+    # data = np.concatenate((data,)*50)
+    l = len(data)
     # On prend seulement le premier channel
-    a = data.T
-    
     # Calcule la transformée de Fourier (amplitudes)
-    print('* calcul de la transformée de Fourier')
-    amp = np.abs(fft(a))
+    amp = abs(fft(data))
     
     # Niveau de bruit (arbitraire)
-    noise = 70*amp.mean()
+    noise = 50*amp.mean()
     
     # On a seulement besoin de la première moitiée (symétrie des fonctions réelles)
-    d = len(amp)//2  
+    d = len(amp)//2
     amp = amp[:d]
     
     # Pour l'axe x en Hz
-    k = np.arange(len(data)//2)
-    T = len(data)/fs
+    k = np.arange(l//2)
+    T = l/fs
     frq = k/T
-    plt.plot(np.arange(len(a))*T/100000, a)
- #   plt.show()
+    # sd.play(data, samplerate=fs)
+    time = np.arange(l) * T / 100000
+    plt.plot(time, data)
+    # plt.show()
     
     # On sélectionne les pics significatifs
     # ... si le point est plus grand que ceux avant et après
     detections = (amp > np.roll(amp, 1)) & (amp > np.roll(amp, -1))
     # ... et si l'amplitude est plus grande que le bruit
     detections = detections & (amp > noise)
-    
+
     # On garde dans deux arrays
     frq_pic = frq[detections]
     amp_pic = amp[detections]
-    
+    print(frq_pic)
+    print("[261.0 329.0 392.0]")
+
     # Graphique
     fig, ax = plt.subplots()
     
@@ -121,8 +83,6 @@ def fft_wav():
     #fig.savefig('fft.png')
     plt.show(fig)
     plt.close(fig)
-    print('* fin')
-    
     
 if __name__ == '__main__':
     fft_wav()

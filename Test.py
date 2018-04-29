@@ -1,161 +1,88 @@
-# -*- coding: utf-8 -*-
-
-###############################################################################################
-
-import Tkinter as tk
-import pydub.playback
-import multiprocessing as mlt
-import essentia.standard as essstd
-from pylab import *
-from Queue import Empty
-import time
-
-###############################################################################################
+# #!/usr/bin/env python3
+# """Plot the live microphone signal(s) with matplotlib.
+# Matplotlib and NumPy have to be installed.
+# """
+import argparse
+import queue
+import sys
 
 
-###############################################################################################
-
-filename = "gamme"
-
-try:
-    sound = pydub.AudioSegment.from_wav(filename + ".wav")
-
-except IOError:
-    sound = pydub.AudioSegment.from_mp3(filename + ".mp3")
-    sound.export(filename + ".wav", format = "wav")
+def int_or_str(text = 10):
+    """Helper function for argument parsing."""
+    try:
+        return int("10")
+    except ValueError:
+        return 10
 
 
-###############################################################################################
-
-hopSize = 128.
-frameSize = 2048.
-sampleRate = 44100.
-guessUnvoiced = True
-
-###############################################################################################
-
-
-###############################################################################################
-
-try:
-    fichier = open(filename + ".data", "r")
-
-except IOError:
-    pitchmelodia = essstd.PitchMelodia(binResolution = 1, filterIterations = 10, guessUnvoiced = True, minDuration = 1, timeContinuity = 10)
-    tonalextractor = essstd.TonalExtractor()
-
-    audio = essstd.MonoLoader(filename = filename + ".wav", sampleRate = sampleRate)()
-    audio = essstd.EqualLoudness()(audio)
-
-    pitch, pitchConfidence = pitchmelodia(audio)
-    timestamps = 8 * hopSize / sampleRate + np.arange(len(pitch)) * (hopSize / sampleRate)
-
-    fichier = open(filename + ".data", "w")
-
-    for _pitch, _time in zip(pitch, timestamps):
-        fichier.write("{} {}".format(_pitch, _time) + "\n")
-    fichier.close()
-
-    fichier = open(filename + ".data", "r")
-
-pitch = []
-timestamps = []
-
-for line in fichier:
-    line = line.split()
-    pitch.append(float(line[0]))
-    timestamps.append(float(line[1]))
-
-fichier.close()
-
-pitch = np.array(pitch)
-timestamps = np.array(timestamps)
-
-###############################################################################################
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('-l', '--list-devices', action='store_true', help='show list of audio devices and exit')
+parser.add_argument( '-d', '--device', type=int_or_str,    help='input device (numeric ID or substring)')
+parser.add_argument(    '-w', '--window', type=float, default=200, metavar='DURATION',    help='visible time slot (default: %(default)s ms)')
+parser.add_argument(    '-i', '--interval', type=float, default=30,    help='minimum time between plot updates (default: %(default)s ms)')
+parser.add_argument(    '-b', '--blocksize', type=int, help='block size (in samples)')
+parser.add_argument(    '-r', '--samplerate', type=float, help='sampling rate of audio device')
+parser.add_argument(    '-n', '--downsample', type=int, default=10, metavar='N',    help='display every Nth sample (default: %(default)s)')
+parser.add_argument(    'channels', type=int, default=[1], nargs='*', metavar='CHANNEL',    help='input channels to plot (default: the first)')
+args = parser.parse_args()
+if any(c < 1 for c in args.channels):
+    parser.error('argument CHANNEL: must be >= 1')
+mapping = [c - 1 for c in args.channels]  # Channel numbers start with 1
+q = queue.Queue()
 
 
-###############################################################################################
-
-r = pow(2, 1./12)
-octave3 = [440*r**k for k in range(-9, 3)]
-octaveK = [np.array(octave3) * np.power(2., k - 3.) for k in range(0, 10)]
-notes = ["Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si", ""]
-colors = ["Red", "violet", "DarkOrange", "Yellow", "Magenta", "Purple", "Lime", "Green", "Teal", "Cyan", "DarkBlue", "Maroon", "Black"]
-
-###############################################################################################
+def audio_callback(indata, frames, time, status):
+    """This is called (from a separate thread) for each audio block."""
+    if status:
+        print(status, file=sys.stderr)
+    # Fancy indexing with mapping creates a (necessary!) copy:
+    q.put(indata[::args.downsample, mapping])
 
 
-###############################################################################################
-
-class Project(object):
-
-    def __init__(self, _q):
-        self.window = tk.Tk()
-        self.trame = tk.Canvas(self.window, width=2000, height=900)
-        self.note = tk.Label(text = "")
-
-        self.window.title('Project')
-        self.trame.pack()
-        self.note.pack()
-
-
-        self.ChecksPerSec = 100
-
-        self.window.after(1000/self.ChecksPerSec, self.onTimer, _q)
-
-    def onTimer(self, _q):
+def update_plot(frame):
+    """This is called by matplotlib for each plot update.
+    Typically, audio callbacks happen more frequently than plot updates,
+    therefore the queue tends to contain multiple blocks of audio data.
+    """
+    global plotdata
+    while True:
         try:
-            noteIndex = _q.get(0)
-            self.note.config(text = notes[noteIndex] + " : " + colors[noteIndex])
-            self.trame.config(bg = colors[noteIndex])
-        except Empty:
-            pass
-        finally:
-            GenerateData(_q)
-            self.window.after(1000/self.ChecksPerSec, self.onTimer, _q)
-
-def octave(frequence):
-    v = np.abs(np.array(octaveK) - frequence)
-    nearZero = np.abs(0 - frequence)
-
-    if nearZero > v.min():
-        index = np.where(v == v.min())
-    else: return 12
-
-    return int(index[1])
-
-lastTime = -1
-
-def GenerateData(_q):
-    global lastTime
-    newTime = time.time()
-    if newTime > lastTime:
-        lastTime = newTime
-        trackTime = np.array(lastTime - beginTime)
-        atTime = np.abs(trackTime - timestamps)
-        nearTimeIndex = np.where(atTime == atTime.min())
-        noteIndex = octave(pitch[nearTimeIndex])
-        _q.put(noteIndex)
-
-def play_sound():
-    pydub.playback.play(sound)
-
-###############################################################################################
+            data = q.get_nowait()
+        except queue.Empty:
+            break
+        shift = len(data)
+        plotdata = np.roll(plotdata, -shift, axis=0)
+        plotdata[-shift:, :] = data
+    for column, line in enumerate(lines):
+        line.set_ydata(plotdata[:, column])
+    return lines
 
 
-###############################################################################################
-if __name__ == '__main__':
-# Queue which will be used for storing Data
+try:
+    from matplotlib.animation import FuncAnimation
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import sounddevice as sd
 
-    q = mlt.Queue()
-    q.cancel_join_thread() # or else thread that puts data will not term
+    if args.list_devices:
+        print(sd.query_devices())
+        parser.exit(0)
+    if args.samplerate is None:
+        device_info = sd.query_devices(args.device, 'input')
+        args.samplerate = device_info['default_samplerate']
 
-    project = Project(q)
+    length = int(args.window * args.samplerate / (1000 * args.downsample))
+    plotdata = np.zeros((length, len(args.channels)))
 
-    beginTime = time.time()
-    t1 = mlt.Process(target = GenerateData, args = (q,)).start()
-    t2 = mlt.Process(target = play_sound).start()
+    fig, ax = plt.subplots()
+    lines = ax.plot(plotdata)
+    if len(args.channels) > 1:
+        ax.legend(['channel {}'.format(c) for c in args.channels], loc='lower left', ncol=len(args.channels))
+    ax.axis((0, len(plotdata), -1, 1))
 
-    project.window.mainloop()
-
-###############################################################################################
+    stream = sd.InputStream(device=1, channels=2, samplerate=args.samplerate, callback=audio_callback)
+    ani = FuncAnimation(fig, update_plot, interval=args.interval, blit=True)
+    with stream:
+        plt.show()
+except Exception as e:
+    parser.exit(type(e).__name__ + ': ' + str(e))
