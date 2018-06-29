@@ -2,314 +2,198 @@
 #!/usr/bin/env python3
 
 import sys
-
-# sys.path.append("/usr/local/lib/python3/dist-packages")
-
 import argparse
 import queue
 import numpy as np
 
 from matplotlib.animation import FuncAnimation
 import matplotlib.pyplot as plt
-import numpy as np
 import sounddevice as sd
-# import essentia
-# import essentia.standard as ess
-import matplotlib.patches as patches
-import soundfile as sf
+from scipy.fftpack import fft
+from scipy.signal import blackmanharris, find_peaks_cwt, argrelmax
 
+import essentia
 
-
-# wasapi_exclusive = sd.WasapiSettings(exclusive=True)
-# sd.default.extra_settings = wasapi_exclusive
 
 r = pow(2, 1./12)
-octave3 = [440*r**k for k in range(-9, 3)]
-octaveK = [np.array(octave3) * np.power(2., k - 3.) for k in range(0, 10)]
-notes = ["Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si", ""]
-colors = ["Red", "violet", "DarkOrange", "Yellow", "Magenta", "Purple", "Lime", "Green", "Teal", "Cyan", "DarkBlue", "Maroon", "White"]
-colorsName = ["Rouge", "Violet", "Orange", "Jaune", "Magenta", "Mauve", "Lime", "Vert", "Teal", "Cyan", "Bleu", "Marron", "Blanc"]
+f3 = np.array([440*r**k for k in range(-9, 3)])
+fn = np.array([np.array(f3) * np.power(2., k - 3.) for k in range(0, 10)])
+notes = np.array(["Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si", ""])
+colors = np.array(["Red", "violet", "DarkOrange", "Yellow", "Magenta", "Purple", "Lime", "Green", "Teal", "Cyan", "DarkBlue", "Maroon", "White"])
+# colors = [(255,0,0),(255,135,0),(255,255,0),(160,255,0),(0,255,0),(105,255,0),(0,255,255),(0,165,255),(0,85,255),(0,0,255),(130,0,255),(255,0,255), (255,255,255)]
+colorsName = np.array(["Rouge", "Violet", "Orange", "Jaune", "Magenta", "Mauve", "Lime", "Vert", "Teal", "Cyan", "Bleu", "Marron", "Blanc"])
 
-# import pycuda as cuda
-
-
-# def fft_data(data, fs):
-#     a = data.T
-#     amp = np.abs(fft(a))
-#     noise = 60 * amp.mean()    # Niveau de bruit (arbitraire)
-#     d = len(amp) // 2
-#     amp = amp[:d]
-#     k = np.arange(len(data) // 2)
-#     T = len(data) / fs
-#     frq = k / T
-#     detections = (amp > np.roll(amp, 1)) & (amp > np.roll(amp, -1))    # On sélectionne les pics significatifs    # ... si le point est plus grand que ceux avant et après
-#     detections = detections & (amp > noise)    # ... et si l'amplitude est plus grande que le bruit
-#     frq_pic = frq[detections]    # On garde dans deux arrays
-#     amp_pic = amp[detections]
-#
-#     return frq_pic, amp_pic
-
-
-def octave(frequence):
-    TabIndex = []
+def frq_note(frequence):
+    listHeightIndex = []
+    listPitchIndex = []
 
     for freq in frequence:
-        v = np.abs(np.array(octaveK) - freq)
-        nearZero = np.abs(0 - freq)
+        delta = np.abs(np.array(fn) - freq)
 
-        if nearZero > v.min():
-            index = np.where(v == v.min())
+        if freq > delta.min():
+            HeightIndex = np.where(delta == delta.min())[0][0]
+            PitchIndex = np.where(delta == delta.min())[1][0]
         else:
-            index = 12
-        TabIndex.append(index)
+            HeightIndex = 0
+            PitchIndex = 12
 
-    return TabIndex
+        listHeightIndex.append(HeightIndex)
+        listPitchIndex.append(PitchIndex)
 
-def int_or_str(text):
-    """Helper function for argument parsing."""
-    try:
-        return int(text)
-    except ValueError:
-        return text
+    return [listHeightIndex, listPitchIndex]
 
-SAMPLERATE = 48000
-BLOCKSIZE = 5000
-
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('-l', '--list-devices', action='store_true',help='show list of audio devices and exit')
-parser.add_argument('-i', '--interval', type=float, default=1, help='minimum time between plot updates (default: %(default)s ms)')
-parser.add_argument('-n', '--downsample', type=int, default=1000, metavar='N', help='display every Nth sample (default: %(default)s)')
-parser.add_argument('channels', type=int, default=[1], nargs='*', metavar='CHANNEL', help='input channels to plot (default: the first)')
-parser.add_argument('-g', '--gain', type=float, default=1, help='initial gain factor (default %(default)s)')
-parser.add_argument('-w', '--window', type=float, default=1000, metavar='DURATION', help='visible time slot (default: %(default)s ms)')
+SAMPLERATE = 44100
+BLOCKSIZE = 2224
+FACTOR = 4
+MNOISE = 50
 
 sd.default.blocksize = BLOCKSIZE
 sd.default.samplerate = SAMPLERATE
 
-# wasapi_exclusive = sd.WasapiSettings(exclusive=True)
-# sd.default.extra_settings = wasapi_exclusive
-
-args = parser.parse_args()
-
-if any(c < 1 for c in args.channels):
-    parser.error('argument CHANNEL: must be >= 1')
-mapping = [c - 1 for c in args.channels]  # Channel numbers start with 1
 q = queue.Queue()
 
-from collections import Counter
-
-# def update_plot(frame):
-#     try:
-#         data = q.get_nowait()
-#         try:
-#             Counts = Counter(data)
-#             Freq = (Counts.most_common())[0][0]
-#             Index = int(octave(data))
-#
-#             rectangle.set_facecolor(colors[Index])
-#             if Index != 12:
-#                 text.set_text(colorsName[Index])
-#                 NoteText.set_text(notes[Index])
-#                 NoteText.set_position((Index*2, 0))
-#             else:
-#                 text.set_text("")
-#                 NoteText.set_text("")
-#         except Exception as e:
-#             print(type(e).__name__ + ': ' + str(e))
-#             rectangle.set_facecolor(colors[12])
-#             text.set_text("")
-#             NoteText.set_text("")
-#     except queue.Empty:
-#         None
-#
-#     rectangle.set_visible(True)
-#     text.set_visible(True)
-#     NoteText.set_visible(True)
-#     return rectangle, text, NoteText,
-
-
-def update_plot(frame):
-    """This is called by matplotlib for each plot update.
-    Typically, audio callbacks happen more frequently than plot updates,
-    therefore the queue tends to contain multiple blocks of audio data.
-    """
-    global plotdata
+def gen_data():
+    global amp
     global data
+    global pic
     while True:
         try:
             queuedata = q.get_nowait()
         except queue.Empty:
             break
-        queuedata = queuedata.T[0] + queuedata.T[1]
+        queuedata = np.sum(queuedata.T, axis=0)
         LENQUEUEDATA = len(queuedata)
-        LENDATA = len(data)
+
         data = np.roll(data, -LENQUEUEDATA)
         data[-LENQUEUEDATA:] = queuedata
+        LENDATA = len(data)
 
-        plotdata = np.abs(fft(data))
-        LENPLOTDATA = len(plotdata)
-        noise = 40 * plotdata.mean()
-
-        plotdata = plotdata[:LENDATA // 2]
+        amp = np.abs(fft(data))
+        LENAMP = len(amp)
+        noise = MNOISE * amp.mean()
+        amp = amp[:LENAMP // 2]
         k = np.arange(LENDATA // 2)
         T = LENDATA / SAMPLERATE
         frq = k / T
 
-        detections = (plotdata > np.roll(plotdata, 1)) & (plotdata > np.roll(plotdata, -1))
-        detections = detections & (plotdata > noise)
+        detections = (amp > np.roll(amp, 1)) & (amp > np.roll(amp, -1))
+        detections = detections & (amp > noise)
+        # detections = argrelmax(amp[detections])
+
         frq_pic = frq[detections]
-        amp_pic = plotdata[detections]
+        amp_pic = amp[detections]
+        LENPIC = len(frq_pic)
 
-        lines.set_ydata(plotdata[:])
+        pic = np.zeros([2, LENPIC])
+        pic[0, :], pic[1, :] = frq_pic, amp_pic
 
-        try:
-            frq_pic[0]
-        except:
-            frq_pic = np.zeros([1])
-            amp_pic = np.zeros([1])
+def update_plot(frame):
+    global pic
+    global data
+    global amp
+    gen_data()
+    lines.set_ydata(amp[:])
+    hline.set_ydata(np.mean(amp)*MNOISE)
+    frq_pic = []
+    try:
+        frq_pic = pic[0]
+        amp_pic = pic[1]
+        IsEmpty = frq_pic[0]
+    except:
+        frq_pic = np.zeros([1])
+        amp_pic = np.zeros([1])
 
-        i = 0
-        max = len(frq_pic)
-        if i < max:
-            text1.set_text(str(frq_pic[i]))
-            text1.set_position((frq_pic[i], amp_pic[i]))
-            i += 1
-        else:
-            text1.set_text("")
-            text1.set_position((0, 0))
+    return lines, hline
 
-        if i < max:
-            text2.set_text(str(frq_pic[i]))
-            text2.set_position((frq_pic[i], amp_pic[i]))
-            i += 1
-        else:
-            text2.set_text("")
-            text2.set_position((0, 0))
+def init1():
+    for Circle in listAnims:
+        Circle.set_animated(True)
+        ax1.add_patch(Circle)
+    return listAnims
 
-        if i < max:
-            text3.set_text(str(frq_pic[i]))
-            text3.set_position((frq_pic[i], amp_pic[i]))
-            i += 1
-        else:
-            text3.set_text("")
-            text3.set_position((0, 0))
+def update_plot1(i):
+    gen_data()
 
-        if i < max:
-            text4.set_text(str(frq_pic[i]))
-            text4.set_position((frq_pic[i], amp_pic[i]))
-            i += 1
-        else:
-            text4.set_text("")
-            text4.set_position((0, 0))
+    frq_pic, amp_pic = pic[0, :], pic[1, :]
 
-        if i < max:
-            text5.set_text(str(frq_pic[i]))
-            text5.set_position((frq_pic[i], amp_pic[i]))
-            i += 1
-        else:
-            text5.set_text("")
-            text5.set_position((0, 0))
+    try:
+        amp_max_pic = np.max(amp_pic)
+        frq_pic, amp_pic = pic[0], pic[1]
+        amp_pic = amp_pic / amp_max_pic
 
-    return lines, text1, text2, text3, text4, text5,
+        # indexQ = np.where(amp_pic > 0.5)
+        # frq_pic = frq_pic[indexQ]
+        # amp_pic = amp_pic[indexQ]
+    except:
+        amp_max_pic = 0
+        frq_pic, amp_pic = np.zeros([1]), np.zeros([1])
 
-# import vamp
-from scipy.fftpack import fft
+    HeightsIndex = frq_note(frq_pic)[0]
+    PitchsIndex = frq_note(frq_pic)[1]
 
-if args.list_devices:
-    print(sd.query_devices())
-    parser.exit(0)
+    for Circle in listAnims:
+        Circle.set_facecolor("white")
+        Circle.set_visible(False)
 
-# length = int(args.window * SAMPLERATE / (1000 * args.downsample))
-# plotdata = np.zeros(length)
+    k = 0
+    for i, j in zip(HeightsIndex, PitchsIndex):
+        x = i * 5
+        y = j * 2 + 2
+        listAnims[k].center = (x, y)
+        # listAnims[k].set_facecolor('#%02x%02x%02x' % colors[PitchsIndex[k]])
+        listAnims[k].set_facecolor(colors[PitchsIndex[k]])
+        listAnims[k].set_radius(amp_pic[k])
+        listAnims[k].set_visible(True)
+        k+=1
 
-# pitchZeros = np.zeros(41)
-#
-# def callback(indata, frames, time, status):#Fonctionne
-#     ppm = ess.PitchMelodia(minDuration = 1, sampleRate = SAMPLERATE, frameSize=frames) #filterIterations = 10, binResolution = 10,
-#     el = ess.EqualLoudness(sampleRate = SAMPLERATE)
-#     pf = ess.PitchFilter()
-#     try:
-#         indataEL = el(indata[:, 0])
-#         pitch, pitchConfidence = ppm(indataEL)
-#         IndexPitchConfidence = np.where(pitchConfidence < 1e-4)
-#         pitch[IndexPitchConfidence] = 0
-#         pitchF = pf(pitch, pitchConfidence)
-#         q.put(pitchF)
-#     except Exception:
-#         q.put(pitchZeros)
+    return listAnims
+
 
 def callback(indata, frames, time, status):
     q.put(indata[:])
 
+data = np.zeros([BLOCKSIZE*FACTOR])
+amp = np.zeros([int(BLOCKSIZE/2)*FACTOR])
+pic = np.zeros([1])
 
-# def callback(indata, frames, time, status):
-#     # el = ess.EqualLoudness(sampleRate = SAMPLERATE)
-#     try:
-#         indataEL = (indata[:, 0]).T
-#         # sd.play(indataEL, samplerate=SAMPLERATE)
-#         amp = np.abs(fft(indataEL))
-#         noise = 60 * amp.mean()  # Niveau de bruit (arbitraire)
-#         d = len(amp) // 2
-#         amp = amp[:d]
-#         k = np.arange(len(indataEL) // 2)
-#         T = len(indataEL) / SAMPLERATE
-#         frq = k / T
-#         detections = []
-#         c1 = np.any((amp > np.roll(amp, 1)) & (amp > np.roll(amp,-1)))
-#         if c1:
-#             detections = (amp > np.roll(amp, 1)) & (amp > np.roll(amp,-1))
-#             c2 = np.any(detections & (amp > noise))
-#             if c2:
-#                 detections = detections & (amp > noise)
-#
-#         frq_pic, amp_pic= frq[detections], amp[detections]
-#         print(frq_pic)
-#         # frq_pic, amp_pic = fft_data(indataEL, SAMPLERATE)
-#         q.put(frq_pic)
-#     except Exception as e:
-#         print(type(e).__name__ + ': ' + str(e))
-#         q.put([])
-
-# fig, ax = plt.subplots()
-
-# lines = ax.plot(plotdata, ls="", marker=".")
-# rectangle = plt.Rectangle((0, 0), 28, 28, fill=True)
-# text = plt.text(14, 14, "", fontsize=15, color='black')
-# NoteText = plt.text(0, 0, "", fontsize=15, color='black')
-# ax.add_patch(rectangle)
-#
-# ax.axis((0, 28, 0, 28))
-#
-# ax.set_yticks([0])
-# ax.yaxis.grid(True)
-# ax.tick_params(bottom='off', top='off', labelbottom='off', right='off', left='off', labelleft='off')
-# fig.tight_layout(pad=0)
-
-
-length = int(args.window * SAMPLERATE / (1000 * args.downsample))
-data = np.zeros([BLOCKSIZE*4])
-plotdata = np.zeros([int(BLOCKSIZE/2)*4])
-LENDATA = len(data)
-
+LENDATA = BLOCKSIZE*FACTOR
 fig, ax = plt.subplots()
 k = np.arange(LENDATA // 2)
 T = LENDATA / SAMPLERATE
 frq = k / T
 
-lines, = ax.plot(frq, plotdata)
-text1 = ax.text(0,0, s="")
-text2 = ax.text(0,0, s="")
-text3 = ax.text(0,0, s="")
-text4 = ax.text(0,0, s="")
-text5 = ax.text(0,0, s="")
+lines, = ax.plot(frq, amp)
+hline = ax.axhline(0, color = "red")
+for i in range(8):
+    for fr in fn[i,:]:
+        if fr < 5000:
+            ax.axvline(fr, color = "red")
 
-ax.set_ylim(-3, 100)
-ax.set_xlim(0, 2000)
-stream = sd.InputStream(device = 1, channels = 2, blocksize = BLOCKSIZE, samplerate = SAMPLERATE, callback = callback)
-ani = FuncAnimation(fig, update_plot, interval = args.interval, blit = True)
+ax.set_ylim(-3, 900)
+ax.set_xlim(0, 5000)
+
+print(sd.query_devices())
+
+ani = FuncAnimation(fig, update_plot, interval = 0, blit = True)
+
+fig1, ax1 = plt.subplots()
+
+listAnims = []
+for i in range(8):
+    for j in range(12):
+        x = i*5
+        y = j*2 + 2
+        listAnims.append(plt.Circle((x,y), radius = 1, fill = True))
+listAnims = tuple(listAnims)
+
+ax1.set_xlim(-2, 38)
+ax1.set_ylim(-2, 26)
+ax1.set_aspect("equal")
+ax1.set_axis_off()
+
+ani1 = FuncAnimation(fig1, update_plot1, init_func = init1, interval = 0, blit = True)
+
+stream = sd.InputStream(channels = 2, blocksize = BLOCKSIZE, samplerate = SAMPLERATE, callback = callback)
 
 with stream:
      plt.show()
-
-# except Exception as e:
-#     parser.exit(type(e).__name__ + ': ' + str(e))
